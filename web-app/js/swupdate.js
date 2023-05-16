@@ -122,9 +122,11 @@ window.onload = function () {
 
   ws.onopen = function (event) {
     updateStatus('IDLE')
+    keepAlive(ws)
   }
 
   ws.onclose = function (event) {
+    cancelKeepAlive()
     showRestart()
   }
 
@@ -152,5 +154,20 @@ window.onload = function () {
         updateProgressBar(percent, msg.name, value)
         break
     }
+  }
+}
+
+let timerId = 0
+
+function keepAlive (ws, timeout = 15000) {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send('{"type": "ping"}')
+  }
+  timerId = setTimeout(keepAlive, timeout, ws)
+}
+
+function cancelKeepAlive () {
+  if (timerId) {
+    clearTimeout(timerId)
   }
 }

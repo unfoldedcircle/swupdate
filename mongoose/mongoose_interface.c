@@ -67,6 +67,7 @@ const char *global_auth_file;
 static bool ssl;
 static struct mg_tls_opts tls_opts;
 #endif
+static unsigned int ws_ping_interval = 0;
 
 static int ws_pipe;
 
@@ -711,7 +712,25 @@ static void ev_handler(struct mg_connection *nc, int ev, void *ev_data, void *fn
 	} else if (ev == MG_EV_ERROR) {
 		ERROR("%p %s", nc->fd, (char *) ev_data);
 	} else if (ev == MG_EV_WS_MSG) {
+		struct mg_ws_message *wm = (struct mg_ws_message *) ev_data;
+
+		char *msg = mg_json_get_str(wm->data, "$.type");
+		if (msg != NULL && !strcmp(msg, "ping")) {
+			const char *msg = "{\"type\": \"pong\"}";
+			mg_ws_send(nc, msg, strlen(msg), WEBSOCKET_OP_TEXT);
+		}
+
 		mg_iobuf_del(&nc->recv, 0, nc->recv.len);
+	}
+}
+
+// Broadcast ping message to all connected websocket clients.
+static void ping_timer_fn(void *arg) {
+	struct mg_mgr *mgr = (struct mg_mgr *) arg;
+	for (struct mg_connection *c = mgr->conns; c != NULL; c = c->next) {
+		if (c->label[0] == 'W') {
+			mg_ws_send(c, "", 0, WEBSOCKET_OP_PING);
+		}
 	}
 }
 
@@ -755,6 +774,8 @@ static int mongoose_settings(void *elem, void  __attribute__ ((__unused__)) *dat
 	get_field(LIBCFG_PARSER, elem, "run-postupdate", &run_postupdate);
 
 	get_field(LIBCFG_PARSER, elem, "timeout", &watchdog_conn);
+
+	get_field(LIBCFG_PARSER, elem, "ws_ping_interval", &ws_ping_interval);
 
 	return 0;
 }
@@ -912,6 +933,11 @@ int start_mongoose(const char *cfgfname, int argc, char *argv[])
 		free(opts.port);
 	} else {
 		url = mg_mprintf(":%s", MG_PORT);
+	}
+
+	if (ws_ping_interval > 0) {
+		INFO("Starting WebSocket ping timer with interval: %us", ws_ping_interval);
+		mg_timer_add(&mgr, ws_ping_interval * 1000, MG_TIMER_REPEAT, ping_timer_fn, &mgr);
 	}
 
 	nc = mg_http_listen(&mgr, url, ev_handler, NULL);
